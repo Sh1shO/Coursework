@@ -2,9 +2,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QTableWid
                                QTableWidgetItem, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QDialog, QFormLayout, QDateEdit, QComboBox, QMessageBox, QDoubleSpinBox,
                                QSizePolicy, QHeaderView, QInputDialog, QFileDialog)
-from PySide6.QtCore import QDate, Qt, QSize, Signal
+from PySide6.QtCore import QDate, Qt, QSize, Signal, QTimer
 from PySide6.QtGui import QIcon
-from db import get_session, Animal, Species, Enclosure, Employee, HealthRecord, AnimalFeed, Feed, Offspring
+from db import get_session, Animal, Species, Enclosure, Employee, HealthRecord, AnimalFeed, Feed, Offspring, AnimalCaretaker
 from fpdf import FPDF
 
 # Кастомный класс для кнопки с иконкой "+"
@@ -253,6 +253,20 @@ class EnclosureDialog(BaseDialog):
             self.location.setText(enclosure.location)
             self.description.setText(enclosure.description)
 
+# Диалог для кормов
+class FeedDialog(BaseDialog):
+    def __init__(self, parent=None, feed=None):
+        super().__init__(parent, "Корм")
+        self.name = QLineEdit()
+        self.description = QLineEdit()
+
+        self.layout.addRow("Название:", self.name)
+        self.layout.addRow("Описание:", self.description)
+
+        if feed:
+            self.name.setText(feed.name)
+            self.description.setText(feed.description)
+
 # Диалог для кормления
 class AnimalFeedDialog(BaseDialog):
     def __init__(self, parent=None, animal_feed=None):
@@ -322,7 +336,6 @@ class OffspringDialog(BaseDialog):
         self.sex = QComboBox()
         self.sex.addItems(["Male", "Female"])
 
-        # Загружаем животных для выбора родителей
         with get_session() as session:
             animals = session.query(Animal).all()
             if not animals:
@@ -348,6 +361,33 @@ class OffspringDialog(BaseDialog):
             self.date_of_birth.setDate(QDate.fromString(str(offspring.date_of_birth), "yyyy-MM-dd"))
             self.sex.setCurrentText(offspring.sex)
 
+# Диалог для назначения ухаживающих
+class AnimalCaretakerDialog(BaseDialog):
+    def __init__(self, parent=None, caretaker=None):
+        super().__init__(parent, "Назначение ухаживающего")
+        self.employee = QComboBox()
+        self.animal = QComboBox()
+
+        with get_session() as session:
+            employees = session.query(Employee).all()
+            if not employees:
+                QMessageBox.warning(self, "Предупреждение", "Нет сотрудников. Добавьте сотрудников.")
+            for emp in employees:
+                self.employee.addItem(emp.name, emp.id)
+
+            animals = session.query(Animal).all()
+            if not animals:
+                QMessageBox.warning(self, "Предупреждение", "Нет животных. Добавьте животных.")
+            for a in animals:
+                self.animal.addItem(a.name, a.id)
+
+        self.layout.addRow("Сотрудник:", self.employee)
+        self.layout.addRow("Животное:", self.animal)
+
+        if caretaker:
+            self.employee.setCurrentIndex(self.employee.findData(caretaker.employee_id))
+            self.animal.setCurrentIndex(self.animal.findData(caretaker.animal_id))
+
 # Главное окно
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -361,6 +401,7 @@ class MainWindow(QMainWindow):
         self.current_table = self.animals_table
         self.animals_table.show()
         self.set_active_button("Животные")
+        self.start_auto_refresh()
 
     def apply_styles(self):
         self.setStyleSheet("""
@@ -499,9 +540,11 @@ class MainWindow(QMainWindow):
             ("Животные", "plus.svg", QSize(24, 24)),
             ("Сотрудники", "plus.svg", QSize(24, 24)),
             ("Вольеры", "plus.svg", QSize(24, 24)),
+            ("Корма", "plus.svg", QSize(24, 24)),
             ("Кормление", "plus.svg", QSize(24, 24)),
             ("Медицина", "plus.svg", QSize(24, 24)),
             ("Потомство", "plus.svg", QSize(24, 24)),
+            ("Ухаживающие", "plus.svg", QSize(24, 24)),
         ]
 
         for text, plus_icon_path, plus_icon_size in button_configs:
@@ -524,9 +567,11 @@ class MainWindow(QMainWindow):
             "Отчёт по животным",
             "Отчёт по сотрудникам",
             "Отчёт по вольерам",
+            "Отчёт по кормам",
             "Отчёт по кормлению",
             "Отчёт по медицинским записям",
             "Отчёт по родословной",
+            "Отчёт по ухаживающим",
         ])
         self.report_combo.setCurrentText("Отчёт по животным")
 
@@ -572,11 +617,15 @@ class MainWindow(QMainWindow):
         self.animals_table = QTableWidget()
         self.employees_table = QTableWidget()
         self.enclosures_table = QTableWidget()
+        self.feeds_table = QTableWidget()
         self.feeding_table = QTableWidget()
         self.health_table = QTableWidget()
         self.offspring_table = QTableWidget()
+        self.caretaker_table = QTableWidget()
+
         for table in [self.animals_table, self.employees_table, self.enclosures_table,
-                      self.feeding_table, self.health_table, self.offspring_table]:
+                      self.feeds_table, self.feeding_table, self.health_table,
+                      self.offspring_table, self.caretaker_table]:
             table.setAlternatingRowColors(True)
             table.setEditTriggers(QTableWidget.NoEditTriggers)
             table.doubleClicked.connect(self.edit_item_on_double_click)
@@ -590,6 +639,30 @@ class MainWindow(QMainWindow):
         self.hide_all_tables()
         self.current_table = None
 
+    def start_auto_refresh(self):
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh_current_table)
+        self.timer.start(5000)  # Обновление каждые 5 секунд
+
+    def refresh_current_table(self):
+        if self.current_table:
+            if self.current_table == self.animals_table:
+                self.show_animals()
+            elif self.current_table == self.employees_table:
+                self.show_employees()
+            elif self.current_table == self.enclosures_table:
+                self.show_enclosures()
+            elif self.current_table == self.feeds_table:
+                self.show_feeds()
+            elif self.current_table == self.feeding_table:
+                self.show_feeding()
+            elif self.current_table == self.health_table:
+                self.show_health()
+            elif self.current_table == self.offspring_table:
+                self.show_offspring()
+            elif self.current_table == self.caretaker_table:
+                self.show_caretakers()
+
     def generate_report(self):
         report_type = self.report_combo.currentText()
         if not report_type:
@@ -598,7 +671,6 @@ class MainWindow(QMainWindow):
 
         try:
             with get_session() as session:
-                # Создание PDF
                 pdf = FPDF()
                 pdf.set_auto_page_break(auto=True, margin=15)
                 pdf.add_page()
@@ -649,6 +721,16 @@ class MainWindow(QMainWindow):
                     pdf.set_font('FreeSans', '', 14)
                     pdf.cell(0, 10, f"Общее количество вольеров: {len(enclosures)}", ln=True, align='R')
 
+                elif report_type == "Отчёт по кормам":
+                    feeds = session.query(Feed).all()
+                    for feed in feeds:
+                        pdf.cell(200, 10, f"Название: {feed.name}", ln=True)
+                        pdf.cell(200, 10, f"Описание: {feed.description if feed.description else 'Нет описания'}", ln=True)
+                        pdf.ln(5)
+                    pdf.ln(10)
+                    pdf.set_font('FreeSans', '', 14)
+                    pdf.cell(0, 10, f"Общее количество кормов: {len(feeds)}", ln=True, align='R')
+
                 elif report_type == "Отчёт по кормлению":
                     feedings = session.query(AnimalFeed).all()
                     total_daily_amount = 0
@@ -684,21 +766,27 @@ class MainWindow(QMainWindow):
                         QMessageBox.warning(self, "Ошибка", f"Животное с именем '{animal_name}' не найдено.")
                         return
 
-                    # Строим родословную и добавляем в PDF
                     pedigree = self.build_pedigree(animal, session, depth=0)
                     pdf.multi_cell(200, 10, f"Родословная для {animal.name}:\n{pedigree}")
 
-                # Сохранение PDF с выбором пути
+                elif report_type == "Отчёт по ухаживающим":
+                    caretakers = session.query(AnimalCaretaker).all()
+                    for caretaker in caretakers:
+                        pdf.cell(200, 10, f"Сотрудник: {caretaker.fk_employee.name if caretaker.fk_employee else 'Не указано'}", ln=True)
+                        pdf.cell(200, 10, f"Животное: {caretaker.fk_animal.name if caretaker.fk_animal else 'Не указано'}", ln=True)
+                        pdf.ln(5)
+                    pdf.ln(10)
+                    pdf.set_font('FreeSans', '', 14)
+                    pdf.cell(0, 10, f"Общее количество назначений: {len(caretakers)}", ln=True, align='R')
+
                 report_filename = report_type.lower().replace(" ", "_").replace("отчёт_", "") + "_report.pdf"
                 pdf_output_path, _ = QFileDialog.getSaveFileName(
                     self, "Сохранить отчёт", report_filename, "PDF Files (*.pdf)"
                 )
                 if not pdf_output_path:
-                    return  # Пользователь отменил выбор
+                    return
 
                 pdf.output(pdf_output_path)
-
-                print(f"Отчёт был успешно экспортирован в {pdf_output_path}")
                 QMessageBox.information(self, "Успех", f"Отчёт был успешно экспортирован в:\n{pdf_output_path}")
 
         except Exception as e:
@@ -733,6 +821,9 @@ class MainWindow(QMainWindow):
         elif section == "Вольеры":
             self.current_table = self.enclosures_table
             self.show_enclosures()
+        elif section == "Корма":
+            self.current_table = self.feeds_table
+            self.show_feeds()
         elif section == "Кормление":
             self.current_table = self.feeding_table
             self.show_feeding()
@@ -742,6 +833,9 @@ class MainWindow(QMainWindow):
         elif section == "Потомство":
             self.current_table = self.offspring_table
             self.show_offspring()
+        elif section == "Ухаживающие":
+            self.current_table = self.caretaker_table
+            self.show_caretakers()
         self.current_table.show()
         self.set_active_button(section)
 
@@ -800,6 +894,18 @@ class MainWindow(QMainWindow):
                         session.add(new_enclosure)
                         session.commit()
                         self.show_enclosures()
+            elif section == "Корма":
+                self.current_table = self.feeds_table
+                dialog = FeedDialog(self)
+                if dialog.exec():
+                    with get_session() as session:
+                        new_feed = Feed(
+                            name=dialog.name.text(),
+                            description=dialog.description.text()
+                        )
+                        session.add(new_feed)
+                        session.commit()
+                        self.show_feeds()
             elif section == "Кормление":
                 self.current_table = self.feeding_table
                 dialog = AnimalFeedDialog(self)
@@ -841,6 +947,18 @@ class MainWindow(QMainWindow):
                         session.add(new_offspring)
                         session.commit()
                         self.show_offspring()
+            elif section == "Ухаживающие":
+                self.current_table = self.caretaker_table
+                dialog = AnimalCaretakerDialog(self)
+                if dialog.exec():
+                    with get_session() as session:
+                        new_caretaker = AnimalCaretaker(
+                            employee_id=dialog.employee.currentData(),
+                            animal_id=dialog.animal.currentData()
+                        )
+                        session.add(new_caretaker)
+                        session.commit()
+                        self.show_caretakers()
 
     def load_data(self, session, model, table_widget, headers, data_function):
         self.current_items = session.query(model).all()
@@ -883,6 +1001,14 @@ class MainWindow(QMainWindow):
             self.load_data(session, Enclosure, self.enclosures_table, headers, get_enclosure_data)
             self.set_active_button("Вольеры")
 
+    def show_feeds(self):
+        with get_session() as session:
+            headers = ["Название", "Описание"]
+            def get_feed_data(feed):
+                return [feed.name, feed.description]
+            self.load_data(session, Feed, self.feeds_table, headers, get_feed_data)
+            self.set_active_button("Корма")
+
     def show_feeding(self):
         with get_session() as session:
             headers = ["Животное", "Корм", "Суточная норма (кг)"]
@@ -921,9 +1047,21 @@ class MainWindow(QMainWindow):
             self.load_data(session, Offspring, self.offspring_table, headers, get_offspring_data)
             self.set_active_button("Потомство")
 
+    def show_caretakers(self):
+        with get_session() as session:
+            headers = ["Сотрудник", "Животное"]
+            def get_caretaker_data(caretaker):
+                return [
+                    caretaker.fk_employee.name if caretaker.fk_employee else "",
+                    caretaker.fk_animal.name if caretaker.fk_animal else ""
+                ]
+            self.load_data(session, AnimalCaretaker, self.caretaker_table, headers, get_caretaker_data)
+            self.set_active_button("Ухаживающие")
+
     def hide_all_tables(self):
         for table in [self.animals_table, self.employees_table, self.enclosures_table,
-                      self.feeding_table, self.health_table, self.offspring_table]:
+                      self.feeds_table, self.feeding_table, self.health_table,
+                      self.offspring_table, self.caretaker_table]:
             table.hide()
 
     def add_item(self):
@@ -967,6 +1105,16 @@ class MainWindow(QMainWindow):
                         session.add(new_enclosure)
                         session.commit()
                         self.show_enclosures()
+                elif self.current_table == self.feeds_table:
+                    dialog = FeedDialog(self)
+                    if dialog.exec():
+                        new_feed = Feed(
+                            name=dialog.name.text(),
+                            description=dialog.description.text()
+                        )
+                        session.add(new_feed)
+                        session.commit()
+                        self.show_feeds()
                 elif self.current_table == self.feeding_table:
                     dialog = AnimalFeedDialog(self)
                     if dialog.exec():
@@ -1002,6 +1150,16 @@ class MainWindow(QMainWindow):
                         session.add(new_offspring)
                         session.commit()
                         self.show_offspring()
+                elif self.current_table == self.caretaker_table:
+                    dialog = AnimalCaretakerDialog(self)
+                    if dialog.exec():
+                        new_caretaker = AnimalCaretaker(
+                            employee_id=dialog.employee.currentData(),
+                            animal_id=dialog.animal.currentData()
+                        )
+                        session.add(new_caretaker)
+                        session.commit()
+                        self.show_caretakers()
             except Exception as e:
                 session.rollback()
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при добавлении: {str(e)}")
@@ -1069,6 +1227,21 @@ class MainWindow(QMainWindow):
                         session.merge(item)
                         session.commit()
                         self.show_enclosures()
+                elif self.current_table == self.feeds_table:
+                    self.current_items = session.query(Feed).all()
+                    if current_row >= len(self.current_items):
+                        return
+                    item_id = self.current_items[current_row].id
+                    item = session.query(Feed).filter_by(id=item_id).first()
+                    if not item:
+                        return
+                    dialog = FeedDialog(self, item)
+                    if dialog.exec():
+                        item.name = dialog.name.text()
+                        item.description = dialog.description.text()
+                        session.merge(item)
+                        session.commit()
+                        self.show_feeds()
                 elif self.current_table == self.feeding_table:
                     self.current_items = session.query(AnimalFeed).all()
                     if current_row >= len(self.current_items):
@@ -1119,6 +1292,21 @@ class MainWindow(QMainWindow):
                         session.merge(item)
                         session.commit()
                         self.show_offspring()
+                elif self.current_table == self.caretaker_table:
+                    self.current_items = session.query(AnimalCaretaker).all()
+                    if current_row >= len(self.current_items):
+                        return
+                    item_id = self.current_items[current_row].id
+                    item = session.query(AnimalCaretaker).filter_by(id=item_id).first()
+                    if not item:
+                        return
+                    dialog = AnimalCaretakerDialog(self, item)
+                    if dialog.exec():
+                        item.employee_id = dialog.employee.currentData()
+                        item.animal_id = dialog.animal.currentData()
+                        session.merge(item)
+                        session.commit()
+                        self.show_caretakers()
                 QMessageBox.information(self, "Успех", "Данные успешно отредактированы!")
             except Exception as e:
                 session.rollback()
@@ -1174,6 +1362,17 @@ class MainWindow(QMainWindow):
                     session.delete(item)
                     session.commit()
                     self.show_enclosures()
+                elif self.current_table == self.feeds_table:
+                    self.current_items = session.query(Feed).all()
+                    if current_row >= len(self.current_items):
+                        return
+                    item_id = self.current_items[current_row].id
+                    item = session.query(Feed).filter_by(id=item_id).first()
+                    if not item:
+                        return
+                    session.delete(item)
+                    session.commit()
+                    self.show_feeds()
                 elif self.current_table == self.feeding_table:
                     self.current_items = session.query(AnimalFeed).all()
                     if current_row >= len(self.current_items):
@@ -1207,6 +1406,17 @@ class MainWindow(QMainWindow):
                     session.delete(item)
                     session.commit()
                     self.show_offspring()
+                elif self.current_table == self.caretaker_table:
+                    self.current_items = session.query(AnimalCaretaker).all()
+                    if current_row >= len(self.current_items):
+                        return
+                    item_id = self.current_items[current_row].id
+                    item = session.query(AnimalCaretaker).filter_by(id=item_id).first()
+                    if not item:
+                        return
+                    session.delete(item)
+                    session.commit()
+                    self.show_caretakers()
                 QMessageBox.information(self, "Успех", "Запись успешно удалена!")
             except Exception as e:
                 session.rollback()
@@ -1220,12 +1430,16 @@ class MainWindow(QMainWindow):
                 self.show_employees()
             elif self.current_table == self.enclosures_table:
                 self.show_enclosures()
+            elif self.current_table == self.feeds_table:
+                self.show_feeds()
             elif self.current_table == self.feeding_table:
                 self.show_feeding()
             elif self.current_table == self.health_table:
                 self.show_health()
             elif self.current_table == self.offspring_table:
                 self.show_offspring()
+            elif self.current_table == self.caretaker_table:
+                self.show_caretakers()
             return
         with get_session() as session:
             text = text.lower()
@@ -1289,6 +1503,23 @@ class MainWindow(QMainWindow):
                     for col, value in enumerate(get_enclosure_data(item)):
                         self.enclosures_table.setItem(row, col, QTableWidgetItem(str(value)))
                 self.enclosures_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+            elif self.current_table == self.feeds_table:
+                filtered_items = session.query(Feed).filter(
+                    (Feed.name.ilike(f"%{text}%")) |
+                    (Feed.description.ilike(f"%{text}%"))
+                ).all()
+                headers = ["Название", "Описание"]
+                def get_feed_data(feed):
+                    return [feed.name, feed.description]
+                self.current_items = filtered_items
+                self.feeds_table.setRowCount(len(filtered_items))
+                self.feeds_table.setColumnCount(len(headers))
+                self.feeds_table.setHorizontalHeaderLabels(headers)
+                for row, item in enumerate(filtered_items):
+                    for col, value in enumerate(get_feed_data(item)):
+                        self.feeds_table.setItem(row, col, QTableWidgetItem(str(value)))
+                self.feeds_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
             elif self.current_table == self.feeding_table:
                 filtered_items = session.query(AnimalFeed).filter(
@@ -1356,7 +1587,22 @@ class MainWindow(QMainWindow):
                         self.offspring_table.setItem(row, col, QTableWidgetItem(str(value)))
                 self.offspring_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
-app = QApplication([])
-window = MainWindow()
-window.show()
-app.exec()
+            elif self.current_table == self.caretaker_table:
+                filtered_items = session.query(AnimalCaretaker).filter(
+                    (AnimalCaretaker.fk_employee.has(Employee.name.ilike(f"%{text}%"))) |
+                    (AnimalCaretaker.fk_animal.has(Animal.name.ilike(f"%{text}%")))
+                ).all()
+                headers = ["Сотрудник", "Животное"]
+                def get_caretaker_data(caretaker):
+                    return [
+                        caretaker.fk_employee.name if caretaker.fk_employee else "",
+                        caretaker.fk_animal.name if caretaker.fk_animal else ""
+                    ]
+                self.current_items = filtered_items
+                self.caretaker_table.setRowCount(len(filtered_items))
+                self.caretaker_table.setColumnCount(len(headers))
+                self.caretaker_table.setHorizontalHeaderLabels(headers)
+                for row, item in enumerate(filtered_items):
+                    for col, value in enumerate(get_caretaker_data(item)):
+                        self.caretaker_table.setItem(row, col, QTableWidgetItem(str(value)))
+                self.caretaker_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
