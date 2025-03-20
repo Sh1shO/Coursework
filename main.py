@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QTableWid
                                QSizePolicy, QHeaderView, QInputDialog, QFileDialog)
 from PySide6.QtCore import QDate, Qt, QSize, Signal, QTimer
 from PySide6.QtGui import QIcon
-from db import get_session, Animal, Species, Enclosure, Employee, HealthRecord, AnimalFeed, Feed, Offspring, AnimalCaretaker
+from db import get_session, Animal, Species, Enclosure, Employee, HealthRecord, AnimalFeed, Feed, Offspring, AnimalCaretaker, Position
 from fpdf import FPDF
 
 # Кастомный класс для кнопки с иконкой "+"
@@ -135,6 +135,15 @@ class SpeciesDialog(BaseDialog):
         if species:
             self.name.setText(species.name)
 
+# Диалог для добавления должности
+class PositionDialog(BaseDialog):
+    def __init__(self, parent=None, position=None):
+        super().__init__(parent, "Добавить должность")
+        self.name = QLineEdit()
+        self.layout.addRow("Название должности:", self.name)
+        if position:
+            self.name.setText(position.name)
+
 # Диалог для животных
 class AnimalDialog(BaseDialog):
     def __init__(self, parent=None, animal=None):
@@ -181,8 +190,6 @@ class AnimalDialog(BaseDialog):
         self.species.clear()
         with get_session() as session:
             species_list = session.query(Species).all()
-            if not species_list:
-                QMessageBox.warning(self, "Предупреждение", "Нет видов животных. Добавьте виды.")
             for sp in species_list:
                 self.species.addItem(sp.name, sp.id)
 
@@ -190,8 +197,6 @@ class AnimalDialog(BaseDialog):
         self.enclosure.clear()
         with get_session() as session:
             enclosures = session.query(Enclosure).all()
-            if not enclosures:
-                QMessageBox.warning(self, "Предупреждение", "Нет вольеров. Добавьте вольеры.")
             for enc in enclosures:
                 self.enclosure.addItem(enc.name, enc.id)
 
@@ -203,7 +208,6 @@ class AnimalDialog(BaseDialog):
                     new_species = Species(name=species_dialog.name.text())
                     session.add(new_species)
                     session.commit()
-                    QMessageBox.information(self, "Успех", "Новый вид успешно добавлен!")
                     self.load_species()
                     self.species.setCurrentIndex(self.species.findData(new_species.id))
                 except Exception as e:
@@ -215,22 +219,52 @@ class EmployeeDialog(BaseDialog):
     def __init__(self, parent=None, employee=None):
         super().__init__(parent, "Сотрудник")
         self.name = QLineEdit()
-        self.position = QLineEdit()
+        self.position = QComboBox()
         self.phone = QLineEdit()
         self.hire_date = QDateEdit()
         self.hire_date.setCalendarPopup(True)
         self.hire_date.setDate(QDate.currentDate())
 
+        self.load_positions()
+
+        position_layout = QHBoxLayout()
+        position_layout.addWidget(self.position)
+        add_position_button = QPushButton("Добавить должность")
+        add_position_button.setObjectName("add_position_button")
+        add_position_button.clicked.connect(self.add_position)
+        position_layout.addWidget(add_position_button)
+
         self.layout.addRow("Имя:", self.name)
-        self.layout.addRow("Должность:", self.position)
+        self.layout.addRow("Должность:", position_layout)
         self.layout.addRow("Телефон:", self.phone)
         self.layout.addRow("Дата найма:", self.hire_date)
 
         if employee:
             self.name.setText(employee.name)
-            self.position.setText(employee.position)
+            self.position.setCurrentIndex(self.position.findData(employee.position_id))
             self.phone.setText(employee.phone)
             self.hire_date.setDate(QDate.fromString(str(employee.hire_date), "yyyy-MM-dd"))
+
+    def load_positions(self):
+        self.position.clear()
+        with get_session() as session:
+            positions = session.query(Position).all()
+            for pos in positions:
+                self.position.addItem(pos.name, pos.id)
+
+    def add_position(self):
+        position_dialog = PositionDialog(self)
+        if position_dialog.exec():
+            with get_session() as session:
+                try:
+                    new_position = Position(name=position_dialog.name.text())
+                    session.add(new_position)
+                    session.commit()
+                    self.load_positions()
+                    self.position.setCurrentIndex(self.position.findData(new_position.id))
+                except Exception as e:
+                    session.rollback()
+                    QMessageBox.critical(self, "Ошибка", f"Ошибка при добавлении должности: {str(e)}")
 
 # Диалог для вольеров
 class EnclosureDialog(BaseDialog):
@@ -276,26 +310,55 @@ class AnimalFeedDialog(BaseDialog):
         self.daily_amount = QDoubleSpinBox()
         self.daily_amount.setRange(0, 1000)
 
-        with get_session() as session:
-            animals = session.query(Animal).all()
-            if not animals:
-                QMessageBox.warning(self, "Предупреждение", "Нет животных. Добавьте животных.")
-            for a in animals:
-                self.animal.addItem(a.name, a.id)
-            feeds = session.query(Feed).all()
-            if not feeds:
-                QMessageBox.warning(self, "Предупреждение", "Нет кормов. Добавьте корма.")
-            for f in feeds:
-                self.feed.addItem(f.name, f.id)
+        self.load_animals()
+        self.load_feeds()
+
+        feed_layout = QHBoxLayout()
+        feed_layout.addWidget(self.feed)
+        add_feed_button = QPushButton("Добавить корм")
+        add_feed_button.setObjectName("add_feed_button")
+        add_feed_button.clicked.connect(self.add_feed)
+        feed_layout.addWidget(add_feed_button)
 
         self.layout.addRow("Животное:", self.animal)
-        self.layout.addRow("Корм:", self.feed)
+        self.layout.addRow("Корм:", feed_layout)
         self.layout.addRow("Суточная норма (кг):", self.daily_amount)
 
         if animal_feed:
             self.animal.setCurrentIndex(self.animal.findData(animal_feed.animal_id))
             self.feed.setCurrentIndex(self.feed.findData(animal_feed.feed_id))
             self.daily_amount.setValue(animal_feed.daily_amount)
+
+    def load_animals(self):
+        self.animal.clear()
+        with get_session() as session:
+            animals = session.query(Animal).all()
+            for a in animals:
+                self.animal.addItem(a.name, a.id)
+
+    def load_feeds(self):
+        self.feed.clear()
+        with get_session() as session:
+            feeds = session.query(Feed).all()
+            for f in feeds:
+                self.feed.addItem(f.name, f.id)
+
+    def add_feed(self):
+        feed_dialog = FeedDialog(self)
+        if feed_dialog.exec():
+            with get_session() as session:
+                try:
+                    new_feed = Feed(
+                        name=feed_dialog.name.text(),
+                        description=feed_dialog.description.text()
+                    )
+                    session.add(new_feed)
+                    session.commit()
+                    self.load_feeds()
+                    self.feed.setCurrentIndex(self.feed.findData(new_feed.id))
+                except Exception as e:
+                    session.rollback()
+                    QMessageBox.critical(self, "Ошибка", f"Ошибка при добавлении корма: {str(e)}")
 
 # Диалог для медицинских записей
 class HealthRecordDialog(BaseDialog):
@@ -309,8 +372,6 @@ class HealthRecordDialog(BaseDialog):
 
         with get_session() as session:
             animals = session.query(Animal).all()
-            if not animals:
-                QMessageBox.warning(self, "Предупреждение", "Нет животных. Добавьте животных.")
             for a in animals:
                 self.animal.addItem(a.name, a.id)
 
@@ -338,8 +399,6 @@ class OffspringDialog(BaseDialog):
 
         with get_session() as session:
             animals = session.query(Animal).all()
-            if not animals:
-                QMessageBox.warning(self, "Предупреждение", "Нет животных. Добавьте животных.")
             self.mother.addItem("Неизвестно", None)
             self.father.addItem("Неизвестно", None)
             for animal in animals:
@@ -370,14 +429,10 @@ class AnimalCaretakerDialog(BaseDialog):
 
         with get_session() as session:
             employees = session.query(Employee).all()
-            if not employees:
-                QMessageBox.warning(self, "Предупреждение", "Нет сотрудников. Добавьте сотрудников.")
             for emp in employees:
                 self.employee.addItem(emp.name, emp.id)
 
             animals = session.query(Animal).all()
-            if not animals:
-                QMessageBox.warning(self, "Предупреждение", "Нет животных. Добавьте животных.")
             for a in animals:
                 self.animal.addItem(a.name, a.id)
 
@@ -462,7 +517,7 @@ class MainWindow(QMainWindow):
                 color: #FFFFFF;
                 border: 1px solid #ECECEC;
             }
-            QPushButton#add_species_button {
+            QPushButton#add_species_button, QPushButton#add_position_button, QPushButton#add_feed_button {
                 background-color: #FFFFFF;
                 color: #636363;
                 border: 1px solid #ECECEC;
@@ -470,7 +525,7 @@ class MainWindow(QMainWindow):
                 padding: 5px 10px;
                 font-size: 14px;
             }
-            QPushButton#add_species_button:hover { 
+            QPushButton#add_species_button:hover, QPushButton#add_position_button:hover, QPushButton#add_feed_button:hover { 
                 background-color: #C7E8FF; 
                 color: #636363; 
             }
@@ -701,7 +756,7 @@ class MainWindow(QMainWindow):
                     employees = session.query(Employee).all()
                     for emp in employees:
                         pdf.cell(200, 10, f"Имя: {emp.name}", ln=True)
-                        pdf.cell(200, 10, f"Должность: {emp.position}", ln=True)
+                        pdf.cell(200, 10, f"Должность: {emp.fk_position.name if emp.fk_position else 'Не указана'}", ln=True)
                         pdf.cell(200, 10, f"Телефон: {emp.phone}", ln=True)
                         pdf.cell(200, 10, f"Дата найма: {emp.hire_date}", ln=True)
                         pdf.ln(5)
@@ -787,7 +842,6 @@ class MainWindow(QMainWindow):
                     return
 
                 pdf.output(pdf_output_path)
-                QMessageBox.information(self, "Успех", f"Отчёт был успешно экспортирован в:\n{pdf_output_path}")
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при генерации отчёта: {str(e)}")
@@ -873,7 +927,7 @@ class MainWindow(QMainWindow):
                     with get_session() as session:
                         new_employee = Employee(
                             name=dialog.name.text(),
-                            position=dialog.position.text(),
+                            position_id=dialog.position.currentData(),
                             phone=dialog.phone.text(),
                             hire_date=dialog.hire_date.date().toPython()
                         )
@@ -989,7 +1043,12 @@ class MainWindow(QMainWindow):
         with get_session() as session:
             headers = ["Имя", "Должность", "Телефон", "Дата найма"]
             def get_employee_data(employee):
-                return [employee.name, employee.position, employee.phone, employee.hire_date]
+                return [
+                    employee.name,
+                    employee.fk_position.name if employee.fk_position else "",
+                    employee.phone,
+                    employee.hire_date
+                ]
             self.load_data(session, Employee, self.employees_table, headers, get_employee_data)
             self.set_active_button("Сотрудники")
 
@@ -1086,7 +1145,7 @@ class MainWindow(QMainWindow):
                     if dialog.exec():
                         new_employee = Employee(
                             name=dialog.name.text(),
-                            position=dialog.position.text(),
+                            position_id=dialog.position.currentData(),
                             phone=dialog.phone.text(),
                             hire_date=dialog.hire_date.date().toPython()
                         )
@@ -1204,7 +1263,7 @@ class MainWindow(QMainWindow):
                     dialog = EmployeeDialog(self, item)
                     if dialog.exec():
                         item.name = dialog.name.text()
-                        item.position = dialog.position.text()
+                        item.position_id = dialog.position.currentData()
                         item.phone = dialog.phone.text()
                         item.hire_date = dialog.hire_date.date().toPython()
                         session.merge(item)
@@ -1307,7 +1366,6 @@ class MainWindow(QMainWindow):
                         session.merge(item)
                         session.commit()
                         self.show_caretakers()
-                QMessageBox.information(self, "Успех", "Данные успешно отредактированы!")
             except Exception as e:
                 session.rollback()
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при редактировании: {str(e)}")
@@ -1417,7 +1475,6 @@ class MainWindow(QMainWindow):
                     session.delete(item)
                     session.commit()
                     self.show_caretakers()
-                QMessageBox.information(self, "Успех", "Запись успешно удалена!")
             except Exception as e:
                 session.rollback()
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при удалении: {str(e)}")
@@ -1471,12 +1528,17 @@ class MainWindow(QMainWindow):
             elif self.current_table == self.employees_table:
                 filtered_items = session.query(Employee).filter(
                     (Employee.name.ilike(f"%{text}%")) |
-                    (Employee.position.ilike(f"%{text}%")) |
+                    (Employee.fk_position.has(Position.name.ilike(f"%{text}%"))) |
                     (Employee.phone.ilike(f"%{text}%"))
                 ).all()
                 headers = ["Имя", "Должность", "Телефон", "Дата найма"]
                 def get_employee_data(employee):
-                    return [employee.name, employee.position, employee.phone, employee.hire_date]
+                    return [
+                        employee.name,
+                        employee.fk_position.name if employee.fk_position else "",
+                        employee.phone,
+                        employee.hire_date
+                    ]
                 self.current_items = filtered_items
                 self.employees_table.setRowCount(len(filtered_items))
                 self.employees_table.setColumnCount(len(headers))
@@ -1585,24 +1647,4 @@ class MainWindow(QMainWindow):
                 for row, item in enumerate(filtered_items):
                     for col, value in enumerate(get_offspring_data(item)):
                         self.offspring_table.setItem(row, col, QTableWidgetItem(str(value)))
-                self.offspring_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-
-            elif self.current_table == self.caretaker_table:
-                filtered_items = session.query(AnimalCaretaker).filter(
-                    (AnimalCaretaker.fk_employee.has(Employee.name.ilike(f"%{text}%"))) |
-                    (AnimalCaretaker.fk_animal.has(Animal.name.ilike(f"%{text}%")))
-                ).all()
-                headers = ["Сотрудник", "Животное"]
-                def get_caretaker_data(caretaker):
-                    return [
-                        caretaker.fk_employee.name if caretaker.fk_employee else "",
-                        caretaker.fk_animal.name if caretaker.fk_animal else ""
-                    ]
-                self.current_items = filtered_items
-                self.caretaker_table.setRowCount(len(filtered_items))
-                self.caretaker_table.setColumnCount(len(headers))
-                self.caretaker_table.setHorizontalHeaderLabels(headers)
-                for row, item in enumerate(filtered_items):
-                    for col, value in enumerate(get_caretaker_data(item)):
-                        self.caretaker_table.setItem(row, col, QTableWidgetItem(str(value)))
-                self.caretaker_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+                self.off

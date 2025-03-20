@@ -8,6 +8,13 @@ engine = create_engine(DATABASE_URL)
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
 
+# Должности
+class Position(Base):
+    __tablename__ = "positions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), nullable=False)
+    employees = relationship("Employee", back_populates="fk_position")
+
 # Виды животных
 class Species(Base):
     __tablename__ = "species"
@@ -58,9 +65,10 @@ class Employee(Base):
     __tablename__ = "employee"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(100))
-    position = Column(String(50))
+    position_id = Column(Integer, ForeignKey("positions.id"))
     phone = Column(String(15))
     hire_date = Column(Date)
+    fk_position = relationship("Position", back_populates="employees")
     caretaking = relationship("AnimalCaretaker", back_populates="fk_employee")
 
 # Уход за животными (связь сотрудник-животное)
