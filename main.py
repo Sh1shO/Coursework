@@ -234,7 +234,7 @@ class EmployeeDialog(BaseDialog):
         add_position_button.clicked.connect(self.add_position)
         position_layout.addWidget(add_position_button)
 
-        self.layout.addRow("Имя:", self.name)
+        self.layout.addRow("ФИО:", self.name)
         self.layout.addRow("Должность:", position_layout)
         self.layout.addRow("Телефон:", self.phone)
         self.layout.addRow("Дата найма:", self.hire_date)
@@ -755,7 +755,7 @@ class MainWindow(QMainWindow):
                 elif report_type == "Отчёт по сотрудникам":
                     employees = session.query(Employee).all()
                     for emp in employees:
-                        pdf.cell(200, 10, f"Имя: {emp.name}", ln=True)
+                        pdf.cell(200, 10, f"ФИО: {emp.name}", ln=True)
                         pdf.cell(200, 10, f"Должность: {emp.fk_position.name if emp.fk_position else 'Не указана'}", ln=True)
                         pdf.cell(200, 10, f"Телефон: {emp.phone}", ln=True)
                         pdf.cell(200, 10, f"Дата найма: {emp.hire_date}", ln=True)
@@ -1041,7 +1041,7 @@ class MainWindow(QMainWindow):
 
     def show_employees(self):
         with get_session() as session:
-            headers = ["Имя", "Должность", "Телефон", "Дата найма"]
+            headers = ["ФИО", "Должность", "Телефон", "Дата найма"]
             def get_employee_data(employee):
                 return [
                     employee.name,
@@ -1531,7 +1531,7 @@ class MainWindow(QMainWindow):
                     (Employee.fk_position.has(Position.name.ilike(f"%{text}%"))) |
                     (Employee.phone.ilike(f"%{text}%"))
                 ).all()
-                headers = ["Имя", "Должность", "Телефон", "Дата найма"]
+                headers = ["ФИО", "Должность", "Телефон", "Дата найма"]
                 def get_employee_data(employee):
                     return [
                         employee.name,
@@ -1647,4 +1647,4 @@ class MainWindow(QMainWindow):
                 for row, item in enumerate(filtered_items):
                     for col, value in enumerate(get_offspring_data(item)):
                         self.offspring_table.setItem(row, col, QTableWidgetItem(str(value)))
-                self.off
+                self.offspring_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
